@@ -157,6 +157,95 @@ const MIGRATIONS: string[] = [
     duration_ms INTEGER NOT NULL
   );
   `,
+  // v2: 대기·반복 할 일, 작업 분야 확장(역할 제약은 코드에서 검증), 프로젝트 분야,
+  //     AI 변경 기록(되돌리기), AI 실행 기록, 레퍼런스
+  `
+  CREATE TABLE tasks_v2 (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER REFERENCES projects (id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'etc',
+    status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'doing', 'done')),
+    priority INTEGER NOT NULL DEFAULT 2 CHECK (priority IN (1, 2, 3)),
+    due_date TEXT,
+    note TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '나',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    done_at TEXT,
+    waiting TEXT NOT NULL DEFAULT '',
+    repeat TEXT NOT NULL DEFAULT '',
+    next_task_id INTEGER
+  );
+  INSERT INTO tasks_v2 (id, project_id, title, role, status, priority, due_date, note, source, created_at, updated_at, done_at)
+    SELECT id, project_id, title, role, status, priority, due_date, note, source, created_at, updated_at, done_at FROM tasks;
+  DROP TABLE tasks;
+  ALTER TABLE tasks_v2 RENAME TO tasks;
+  CREATE INDEX tasks_project ON tasks (project_id, status);
+  CREATE INDEX tasks_due ON tasks (status, due_date);
+
+  ALTER TABLE projects ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+
+  CREATE TABLE refs (
+    id INTEGER PRIMARY KEY,
+    url TEXT NOT NULL,
+    url_key TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    image_url TEXT NOT NULL DEFAULT '',
+    site TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT '기타',
+    tags TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    project_id INTEGER REFERENCES projects (id) ON DELETE SET NULL,
+    source TEXT NOT NULL DEFAULT '나',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX refs_category ON refs (category, created_at);
+
+  CREATE TABLE day_files (
+    id INTEGER PRIMARY KEY,
+    day TEXT NOT NULL,
+    path TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '나',
+    decision TEXT NOT NULL DEFAULT '' CHECK (decision IN ('', 'keep', 'delete')),
+    created_at TEXT NOT NULL,
+    UNIQUE (day, path)
+  );
+
+  CREATE TABLE activity (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    action TEXT NOT NULL,
+    entity_id INTEGER,
+    project_id INTEGER,
+    summary TEXT NOT NULL,
+    before TEXT,
+    via TEXT NOT NULL,
+    undone_at TEXT
+  );
+  CREATE INDEX activity_at ON activity (at);
+
+  CREATE TABLE runs (
+    id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    project_id INTEGER REFERENCES projects (id) ON DELETE SET NULL,
+    request TEXT NOT NULL,
+    plan TEXT NOT NULL,
+    ai TEXT,
+    model TEXT,
+    mode TEXT,
+    status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'running', 'done', 'handed_off', 'failed')),
+    prompt TEXT,
+    response TEXT,
+    error TEXT,
+    result TEXT,
+    finished_at TEXT
+  );
+  CREATE INDEX runs_created ON runs (created_at);
+  `,
 ];
 
 export class Db {

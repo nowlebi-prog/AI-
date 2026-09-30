@@ -1,25 +1,28 @@
 import type { Db } from '../db.ts';
 import { verifyBearer, type AuthInfo } from '../auth/tokens.ts';
+import { currentDay, getTimezone } from '../domain/clock.ts';
 import { UserError } from '../domain/types.ts';
 import { corsHeaders, readBody, sendJson, type Ctx } from '../lib/http.ts';
-import { nowIso, todayIn } from '../lib/time.ts';
+import { nowIso } from '../lib/time.ts';
 import { runTool, toolListing } from './tools.ts';
 
 /** 지원하는 MCP 프로토콜 버전 (최신순) */
 export const SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 
 export const SERVER_INSTRUCTIONS = [
-  'Hub는 사용자의 개인 작업 허브예요. 프로젝트, 결정, 할 일, AI 대화 기록이 모여 있어요.',
+  'Hub는 사용자의 개인 작업 허브예요. 프로젝트, 결정, 할 일, AI 대화 기록, 레퍼런스 링크가 모여 있어요.',
   '- 대화가 특정 프로젝트에 관한 것이면 먼저 get_brief(project)로 최신 맥락을 확인하세요. 어떤 프로젝트인지 모르면 list_projects를 호출하세요.',
   '- 중요한 결정은 propose_decision, 새 할 일이나 할 일 변경은 propose_task로 제안하세요.',
+  '- 사용자가 "추가해 줘", "완료 처리해 줘"처럼 직접 시킨 변경은 direct=true로 보내면 바로 반영돼요. 스스로 정리한 내용은 direct 없이 제안만 하세요.',
   '- 대화를 마칠 때 log_session으로 요약과 마지막 위치(다음에 이어서 할 지점)를 남겨 주세요.',
+  '- 링크를 저장해 달라고 하면 save_reference, 예전에 본 사이트를 찾으면 find_references를 쓰세요.',
+  '- 하루 마감 파일 정리: 파일 목록은 submit_files로 보내고, 지울 목록은 get_file_cleanup으로 받아서 사용자 확인 뒤 휴지통으로만 옮기세요.',
   '- 제안은 사용자가 Hub 인박스에서 승인해야 반영돼요. 승인 전에는 반영됐다고 말하지 마세요.',
-  '- 번호 규칙: P=프로젝트, D=결정, T=할 일, L=세션 기록, I=가져온 문서.',
+  '- 번호 규칙: P=프로젝트, D=결정, T=할 일, L=세션 기록, R=레퍼런스, I=가져온 문서.',
 ].join('\n');
 
 export interface McpDeps {
   db: Db;
-  tz: string;
   version: string;
 }
 
@@ -58,7 +61,14 @@ function logCall(db: Db, entry: { client: string; method: string; tool: string |
   if (r.lastInsertRowid % 100 === 0) db.run('DELETE FROM mcp_calls WHERE id <= ?', r.lastInsertRowid - 2000);
 }
 
-function dispatch(method: string, params: Record<string, unknown>, auth: AuthInfo, ctx: Ctx, deps: McpDeps, note: { tool: string | null; error: string | null }): unknown {
+async function dispatch(
+  method: string,
+  params: Record<string, unknown>,
+  auth: AuthInfo,
+  ctx: Ctx,
+  deps: McpDeps,
+  note: { tool: string | null; error: string | null },
+): Promise<unknown> {
   switch (method) {
     case 'initialize': {
       const requested = typeof params.protocolVersion === 'string' ? params.protocolVersion : '';
@@ -81,12 +91,12 @@ function dispatch(method: string, params: Record<string, unknown>, auth: AuthInf
         throw new RpcError(-32602, `알 수 없는 도구예요: ${name}`);
       }
       try {
-        const text = runTool(name, params.arguments ?? {}, {
+        const text = await runTool(name, params.arguments ?? {}, {
           db: deps.db,
           auth,
           baseUrl: ctx.baseUrl,
-          today: todayIn(deps.tz),
-          tz: deps.tz,
+          today: currentDay(deps.db),
+          tz: getTimezone(deps.db),
         });
         return { content: [{ type: 'text', text }] };
       } catch (err) {
@@ -108,7 +118,7 @@ function dispatch(method: string, params: Record<string, unknown>, auth: AuthInf
   }
 }
 
-function handleMessage(m: unknown, auth: AuthInfo, ctx: Ctx, deps: McpDeps): Record<string, unknown> | null {
+async function handleMessage(m: unknown, auth: AuthInfo, ctx: Ctx, deps: McpDeps): Promise<Record<string, unknown> | null> {
   if (!m || typeof m !== 'object' || Array.isArray(m)) return rpcError(null, -32600, 'Invalid Request');
   const msg = m as RpcMessage;
   const id = typeof msg.id === 'string' || typeof msg.id === 'number' ? msg.id : null;
@@ -121,7 +131,7 @@ function handleMessage(m: unknown, auth: AuthInfo, ctx: Ctx, deps: McpDeps): Rec
   const note: { tool: string | null; error: string | null } = { tool: null, error: null };
   const params = msg.params && typeof msg.params === 'object' ? (msg.params as Record<string, unknown>) : {};
   try {
-    const result = dispatch(msg.method, params, auth, ctx, deps, note);
+    const result = await dispatch(msg.method, params, auth, ctx, deps, note);
     logCall(deps.db, { client: auth.source, method: msg.method, tool: note.tool, ok: note.error === null, error: note.error, ms: Date.now() - started });
     return { jsonrpc: '2.0', id, result };
   } catch (err) {
@@ -173,7 +183,11 @@ export async function handleMcp(ctx: Ctx, deps: McpDeps): Promise<void> {
       sendJson(ctx, rpcError(null, -32600, 'Invalid Request'), 400, cors);
       return;
     }
-    const out = body.map((m) => handleMessage(m, auth, ctx, deps)).filter((r): r is Record<string, unknown> => r !== null);
+    const out: Array<Record<string, unknown>> = [];
+    for (const m of body) {
+      const r = await handleMessage(m, auth, ctx, deps);
+      if (r) out.push(r);
+    }
     if (!out.length) {
       ctx.res.writeHead(202, cors);
       ctx.res.end();
@@ -183,7 +197,7 @@ export async function handleMcp(ctx: Ctx, deps: McpDeps): Promise<void> {
     return;
   }
 
-  const res = handleMessage(body, auth, ctx, deps);
+  const res = await handleMessage(body, auth, ctx, deps);
   if (!res) {
     ctx.res.writeHead(202, cors);
     ctx.res.end();

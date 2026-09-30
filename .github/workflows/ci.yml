@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.18부터 TypeScript를 빌드 없이 실행할 수 있어요 (package.json engines)
+        node: ['22.x', '24.x']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      # 실행·테스트에는 외부 패키지가 필요 없어서 설치 단계가 없어요
+      - run: npm test

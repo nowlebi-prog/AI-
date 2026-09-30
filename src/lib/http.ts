@@ -12,6 +12,8 @@ export class HttpError extends Error {
 export interface SessionInfo {
   nonce: string;
   csrf: string;
+  /** 만료 시각 (초) */
+  exp: number;
 }
 
 export interface Ctx {
@@ -175,7 +177,7 @@ const PAGE_HEADERS: Record<string, string> = {
   'Referrer-Policy': 'same-origin',
   'X-Frame-Options': 'DENY',
   'Content-Security-Policy':
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
 };
 
 export function sendHtml(ctx: Ctx, body: SafeHtml, status = 200): void {

@@ -58,7 +58,7 @@ export class Browser {
     return res;
   }
 
-  async post(path: string, form: Record<string, string | string[]>): Promise<Response> {
+  async post(path: string, form: Record<string, string | string[]>, headers: Record<string, string> = {}): Promise<Response> {
     const body = new URLSearchParams();
     for (const [k, v] of Object.entries(form)) {
       if (Array.isArray(v)) for (const x of v) body.append(k, x);
@@ -67,7 +67,7 @@ export class Browser {
     const res = await fetch(this.base + path, {
       method: 'POST',
       redirect: 'manual',
-      headers: { Cookie: this.cookieHeader(), 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'text/html' },
+      headers: { Cookie: this.cookieHeader(), 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'text/html', ...headers },
       body,
     });
     this.remember(res);

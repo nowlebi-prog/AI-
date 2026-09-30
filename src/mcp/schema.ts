@@ -11,6 +11,8 @@ export interface PropSchema {
   maxLength?: number;
   minimum?: number;
   maximum?: number;
+  /** enum 검사 전에 값을 바꾼다 (예: '디자인' → 'design'). 함수라서 도구 목록(JSON)에는 나가지 않는다 */
+  normalize?: (v: string) => string | null | undefined;
 }
 
 export interface ObjectSchema {
@@ -29,7 +31,9 @@ function coerce(schema: PropSchema, value: unknown, path: string, errors: string
         return undefined;
       }
       if (schema.enum) {
-        const hit = schema.enum.find((e) => e.toLowerCase() === (v as string).trim().toLowerCase());
+        const raw = (v as string).trim();
+        const want = (schema.normalize?.(raw) ?? raw).toLowerCase();
+        const hit = schema.enum.find((e) => e.toLowerCase() === want);
         if (!hit) {
           errors.push(`${path}: ${schema.enum.join(', ')} 중 하나여야 해요`);
           return undefined;

@@ -5,7 +5,9 @@ import { Browser, callTool, mcp, startTestServer, type TestServer } from './help
 import { createPat } from '../src/auth/tokens.ts';
 import { createProject } from '../src/domain/projects.ts';
 import { listProposals, pendingCount, approveProposal } from '../src/domain/proposals.ts';
-import { createTask } from '../src/domain/tasks.ts';
+import { createTask, getTask } from '../src/domain/tasks.ts';
+import { decideDayFiles, listDayFiles } from '../src/domain/wrapup.ts';
+import { currentDay } from '../src/domain/clock.ts';
 
 let srv: TestServer;
 let pat: string;
@@ -63,12 +65,27 @@ test('initialize: 버전 협상과 서버 안내문', async () => {
 test('tools/list: 권한에 따라 도구가 달라진다', async () => {
   const full = await mcp(srv.base, pat, { jsonrpc: '2.0', id: 3, method: 'tools/list' });
   const names = full.json.result.tools.map((t: { name: string }) => t.name);
-  assert.deepEqual(names, ['list_projects', 'get_brief', 'list_tasks', 'search', 'fetch', 'propose_decision', 'propose_task', 'propose_project', 'log_session']);
+  assert.deepEqual(names, [
+    'list_projects',
+    'get_brief',
+    'list_tasks',
+    'recent_activity',
+    'search',
+    'fetch',
+    'find_references',
+    'save_reference',
+    'get_file_cleanup',
+    'submit_files',
+    'propose_decision',
+    'propose_task',
+    'propose_project',
+    'log_session',
+  ]);
   const brief = full.json.result.tools.find((t: { name: string }) => t.name === 'get_brief');
   assert.equal(brief.annotations.readOnlyHint, true);
   assert.equal(brief.inputSchema.type, 'object');
   const ro = await mcp(srv.base, readOnly, { jsonrpc: '2.0', id: 4, method: 'tools/list' });
-  assert.equal(ro.json.result.tools.length, 5);
+  assert.equal(ro.json.result.tools.length, 8);
   const denied = await mcp(srv.base, readOnly, { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'propose_task', arguments: { title: 'x' } } });
   assert.equal(denied.json.error.code, -32602);
 });
@@ -283,5 +300,56 @@ test('OAuth: 비밀 키가 있는 클라이언트와 읽기 전용 동의', asyn
   assert.equal(tok.status, 200);
   assert.equal(tok.json.scope, 'hub:read');
   const tools = await mcp(srv.base, tok.json.access_token, { jsonrpc: '2.0', id: 1, method: 'tools/list' });
-  assert.equal(tools.json.result.tools.length, 5);
+  assert.equal(tools.json.result.tools.length, 8);
+});
+
+test('직접 요청·중복 방지·반복·대기·최근 활동', async () => {
+  const add = await callTool(srv.base, pat, 'propose_task', { project: 'P1', title: '세금계산서 발행', repeat: '매월 10일', role: 'ops', direct: true });
+  assert.match(add.text, /요청대로 바로 반영했어요/);
+  const id = Number(/→ T(\d+)/.exec(add.text)?.[1]);
+  const t = getTask(srv.app.db, id);
+  assert.equal(t?.repeat, 'monthly:10');
+  assert.equal(t?.source, 'Muse');
+  const dup = await callTool(srv.base, pat, 'propose_task', { project: 'P1', title: '세금계산서 발행', direct: true });
+  assert.match(dup.text, /이미 같은 할 일이 있어요 \(T\d+\)/);
+  const wait = await callTool(srv.base, pat, 'propose_task', { task_id: id, waiting: '거래처 사업자번호 확인', direct: true });
+  assert.match(wait.text, /바로 반영/);
+  assert.match((await callTool(srv.base, pat, 'list_tasks', { status: 'waiting' })).text, /대기: 거래처 사업자번호 확인/);
+  assert.match((await callTool(srv.base, pat, 'recent_activity', { days: 7 })).text, /# 최근 7일 활동/);
+  assert.equal((await callTool(srv.base, pat, 'propose_task', { title: 'x', repeat: '가끔' })).isError, true);
+});
+
+test('레퍼런스 저장·찾기와 새 프로젝트 한 번에 제안', async () => {
+  // 내부 주소라 미리보기를 가져오지 않는다 (인터넷에 나가지 않음)
+  const saved = await callTool(srv.base, pat, 'save_reference', { url: 'http://127.0.0.1:1/pricing', title: '가격표 레이아웃', category: '디자인', note: '3단 요금제 표 참고', project: 'P1' });
+  assert.match(saved.text, /레퍼런스에 저장했어요: \[R1\] 가격표 레이아웃 \(디자인\)/);
+  assert.match((await callTool(srv.base, pat, 'save_reference', { url: 'http://127.0.0.1:1/pricing' })).text, /이미 저장된 링크예요/);
+  assert.match((await callTool(srv.base, pat, 'find_references', { query: '요금제' })).text, /\[R1\] 가격표 레이아웃/);
+  assert.match((await callTool(srv.base, pat, 'fetch', { id: 'R1' })).text, /3단 요금제 표 참고/);
+
+  const proj = await callTool(srv.base, pat, 'propose_project', {
+    name: '포트폴리오 사이트',
+    kind: 'design',
+    summary: '작업물 모음',
+    decisions: [{ content: '노션 대신 자체 사이트' }],
+    tasks: [{ title: '케이스 스터디 3개 정리', role: 'docs', due: '다음 주 금요일' }],
+  });
+  assert.match(proj.text, /새 프로젝트 "포트폴리오 사이트" \(결정 1, 할 일 1\)/);
+  const p = listProposals(srv.app.db, 'pending').find((x) => x.kind === 'project' && x.payload.includes('포트폴리오 사이트'));
+  assert.ok(p);
+  approveProposal(srv.app.db, p.id);
+  assert.match((await callTool(srv.base, pat, 'get_brief', { project: '포트폴리오' })).text, /케이스 스터디 3개 정리 · 문서·PPT/);
+});
+
+test('하루 마감 파일 정리: AI가 목록을 올리고, 사용자가 고르면 받아 간다', async () => {
+  const none = await callTool(srv.base, pat, 'get_file_cleanup');
+  assert.match(none.text, /정리할 파일 목록이 없어요/);
+  const sent = await callTool(srv.base, pat, 'submit_files', { files: ['/Users/me/Downloads/a.png', '/Users/me/Downloads/b.zip', '메모'] });
+  assert.match(sent.text, /파일 2개를 올렸어요/);
+  assert.match((await callTool(srv.base, pat, 'get_file_cleanup')).text, /아직 남길 파일을 다 고르지 않았어요/);
+  const files = listDayFiles(srv.app.db, currentDay(srv.app.db));
+  decideDayFiles(srv.app.db, [files[0]?.id ?? 0], currentDay(srv.app.db));
+  const plan = (await callTool(srv.base, pat, 'get_file_cleanup')).text;
+  assert.match(plan, /\[삭제할 파일 1개\]\n- \/Users\/me\/Downloads\/b\.zip/);
+  assert.match(plan, /\[남길 파일 1개\]\n- \/Users\/me\/Downloads\/a\.png/);
 });

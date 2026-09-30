@@ -15,7 +15,7 @@ function loginView(next: string, error: string | null, configured: boolean) {
     html`<h1 class="brand-lg">Hub</h1>
       ${!configured
         ? html`<div class="flash flash-error">비밀번호가 설정되지 않았어요. <code>HUB_PASSWORD</code> 환경변수를 설정한 뒤 다시 실행해 주세요.</div>`
-        : html`<form method="post" action="/login" class="stack">
+        : html`<form method="post" action="/login" class="stack" data-no-ajax>
             <input type="hidden" name="next" value="${next}">
             <label>비밀번호<input type="password" name="password" autocomplete="current-password" required autofocus></label>
             ${error ? html`<div class="flash flash-error">${error}</div>` : ''}

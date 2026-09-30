@@ -249,10 +249,10 @@ export async function fetchNotionPage(
 export function organizePrompt(importId: number): string {
   return [
     `Hub의 fetch 도구로 import:${importId} 문서를 읽고, 내용을 Hub 구조에 맞게 정리해서 제안해 줘.`,
-    '- 프로젝트마다 propose_project (이름, 한 줄 소개, 목표, 타깃, 현재 단계, 제약, 작업 범위)',
-    '- 이미 정해진 사항은 propose_decision (프로젝트별, 이유가 있으면 함께)',
-    '- 남은 할 일은 propose_task (역할과 마감이 보이면 함께)',
-    '- 프로젝트 카드가 승인돼야 결정·할 일을 올릴 수 있으니, 먼저 프로젝트를 제안하고 내가 승인했다고 하면 나머지를 올려 줘.',
+    '- 프로젝트마다 propose_project 한 번씩: 이름, 분야(kind), 한 줄 소개, 목표, 타깃, 현재 단계, 제약, 작업 범위에',
+    '  이미 정해진 사항은 decisions, 남은 할 일은 tasks(분야·마감·반복이 보이면 함께)로 같이 넣어 줘. 그러면 한 번에 승인할 수 있어.',
+    '- 이미 Hub에 있는 프로젝트라면 propose_decision, propose_task로 따로 올려 줘.',
+    '- 문서에 있는 참고 링크는 save_reference로 저장해 줘 (카테고리와 메모 포함).',
     '- 나에 대한 정보(소개, 작업 선호)는 따로 요약해서 알려 줘. 내가 프로필에 붙여 넣을게.',
   ].join('\n');
 }

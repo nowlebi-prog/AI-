@@ -39,7 +39,7 @@ export function importsPage(app: AppCtx) {
             (d) => html`<li><a href="/import/${d.id}">I${d.id} ${d.title}</a> <span class="small muted">${d.source} · ${d.length.toLocaleString()}자 · ${formatDateTime(d.created_at, app.config.timezone)}</span></li>`,
           )}</ul></section>`
         : ''}`;
-    sendHtml(ctx, page(ctx, { title: '가져오기', active: 'import', pending: pendingCount(app.db) }, body));
+    sendHtml(ctx, page(ctx, { title: '가져오기', active: 'settings', pending: pendingCount(app.db) }, body));
   };
 }
 
@@ -92,7 +92,7 @@ export function importDetailPage(app: AppCtx) {
       <form method="post" action="/import/${doc.id}/delete" class="danger-zone" data-confirm="이 문서를 삭제할까요?">
         ${csrfInput(ctx)}<button class="btn btn-ghost danger">문서 삭제</button>
       </form>`;
-    sendHtml(ctx, page(ctx, { title: doc.title, active: 'import', pending: pendingCount(app.db) }, body));
+    sendHtml(ctx, page(ctx, { title: doc.title, active: 'settings', pending: pendingCount(app.db) }, body));
   };
 }
 

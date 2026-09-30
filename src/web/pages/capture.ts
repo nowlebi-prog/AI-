@@ -2,10 +2,11 @@ import type { AppCtx } from '../../app-context.ts';
 import { applyMemo, parseMemos, type MemoApplyResult } from '../../domain/capture.ts';
 import { listProjects } from '../../domain/projects.ts';
 import { pendingCount } from '../../domain/proposals.ts';
+import { currentDay } from '../../domain/clock.ts';
+import { createLog } from '../../domain/decisions.ts';
 import { html, raw, type SafeHtml } from '../../lib/html.ts';
-import { field, readForm, sendHtml, type Ctx } from '../../lib/http.ts';
-import { todayIn } from '../../lib/time.ts';
-import { copyBlock, csrfInput, page } from '../layout.ts';
+import { field, readForm, redirect, sendHtml, type Ctx } from '../../lib/http.ts';
+import { copyBlock, csrfInput, flash, page } from '../layout.ts';
 
 const SOURCES = ['ChatGPT', 'Claude', 'Grok', 'Muse', '기타 AI'];
 
@@ -40,7 +41,8 @@ function formView(app: AppCtx, ctx: Ctx, values: { text: string; source: string;
               ${projects.map((p) => html`<option value="${p.id}" ${String(p.id) === values.project ? raw('selected') : ''}>${p.name}</option>`)}
             </select>
           </label>
-          <button class="btn btn-primary">반영하기</button>
+          <button class="btn btn-primary" name="mode" value="memo">반영하기</button>
+          ${error ? html`<button class="btn" name="mode" value="log" title="메모가 없어도 대화 내용을 세션 기록으로 남겨요">메모 없이 세션 기록으로 저장</button>` : ''}
         </div>
       </form>
       <aside class="col-side card">
@@ -67,7 +69,8 @@ function resultView(results: MemoApplyResult[]): SafeHtml {
         ${r.logId ? html`<li>✅ 세션 요약 저장 (L${r.logId})</li>` : ''}
         ${r.resumeSaved ? html`<li>✅ 마지막 위치 저장</li>` : ''}
         ${applied.map((p) => html`<li>✅ 자동 승인: ${p.label}</li>`)}
-        ${pending.map((p) => html`<li>📥 인박스: ${p.label}</li>`)}
+        ${pending.filter((p) => !p.result.duplicate).map((p) => html`<li>📥 인박스: ${p.label}</li>`)}
+        ${pending.filter((p) => p.result.duplicate).map((p) => html`<li class="muted">↩︎ 이미 있어서 건너뜀: ${p.label}</li>`)}
         ${r.errors.map((e) => html`<li class="error-text">⚠️ ${e}</li>`)}
       </ul>
     </section>`;
@@ -80,7 +83,18 @@ export function captureAction(app: AppCtx) {
     const values = { text: form.get('text') ?? '', source: field(form, 'source') || '기타 AI', project: field(form, 'project') };
     const source = SOURCES.includes(values.source) ? values.source : '기타 AI';
     const pending = () => pendingCount(app.db);
-    const memos = parseMemos(values.text, todayIn(app.config.timezone));
+    if (field(form, 'mode') === 'log') {
+      const text = values.text.trim();
+      if (!text) {
+        sendHtml(ctx, page(ctx, { title: '붙여넣기', active: 'capture', pending: pending() }, formView(app, ctx, values, '저장할 내용이 비어 있어요')), 422);
+        return;
+      }
+      const log = createLog(app.db, { project_id: values.project ? Number(values.project) : null, summary: text.length > 5000 ? `${text.slice(0, 4990)}…` : text }, source);
+      flash(ctx, `세션 기록으로 저장했어요 (L${log.id})`);
+      redirect(ctx, values.project ? `/projects/${values.project}#log-${log.id}` : '/');
+      return;
+    }
+    const memos = parseMemos(values.text, currentDay(app.db));
     if (!memos.length) {
       const msg = '[Hub 메모] 블록을 찾지 못했어요. AI에게 "위 형식의 [Hub 메모]로 정리해 줘"라고 요청한 뒤 다시 붙여 넣어 주세요.';
       sendHtml(ctx, page(ctx, { title: '붙여넣기', active: 'capture', pending: pending() }, formView(app, ctx, values, msg)), 422);

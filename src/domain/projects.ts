@@ -4,6 +4,7 @@ import {
   PROJECT_FIELDS,
   UserError,
   isProjectStatus,
+  toRole,
   type Project,
   type ProjectField,
   type ProjectStatus,
@@ -11,7 +12,15 @@ import {
 
 export interface ProjectListItem extends Project {
   open_tasks: number;
+  /** 진행도 계산용: 반복이 아닌 할 일 전체 / 완료 */
+  total_tasks: number;
+  done_tasks: number;
   last_activity: string;
+}
+
+/** 진행도(%) = 반복이 아닌 할 일 중 완료 비율. 반복 할 일은 계속 생기므로 뺀다 */
+export function progressOf(p: { total_tasks: number; done_tasks: number }): number {
+  return p.total_tasks ? Math.round((p.done_tasks / p.total_tasks) * 100) : 0;
 }
 
 export function listProjects(db: Db, status: ProjectStatus | 'all' = 'all'): ProjectListItem[] {
@@ -20,6 +29,8 @@ export function listProjects(db: Db, status: ProjectStatus | 'all' = 'all'): Pro
   return db.all<ProjectListItem>(
     `SELECT p.*,
        (SELECT count(*) FROM tasks t WHERE t.project_id = p.id AND t.status != 'done') AS open_tasks,
+       (SELECT count(*) FROM tasks t WHERE t.project_id = p.id AND t.repeat = '') AS total_tasks,
+       (SELECT count(*) FROM tasks t WHERE t.project_id = p.id AND t.repeat = '' AND t.status = 'done') AS done_tasks,
        max(p.updated_at,
            coalesce((SELECT max(t.updated_at) FROM tasks t WHERE t.project_id = p.id), p.updated_at),
            coalesce((SELECT max(l.created_at) FROM session_logs l WHERE l.project_id = p.id), p.updated_at),
@@ -29,6 +40,15 @@ export function listProjects(db: Db, status: ProjectStatus | 'all' = 'all'): Pro
      ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END, last_activity DESC, p.id DESC`,
     ...params,
   );
+}
+
+export function projectProgress(db: Db, id: number): { total_tasks: number; done_tasks: number; pct: number } {
+  const r = db.get<{ total_tasks: number; done_tasks: number }>(
+    "SELECT count(*) AS total_tasks, sum(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_tasks FROM tasks WHERE project_id = ? AND repeat = ''",
+    id,
+  ) ?? { total_tasks: 0, done_tasks: 0 };
+  const v = { total_tasks: r.total_tasks, done_tasks: r.done_tasks ?? 0 };
+  return { ...v, pct: progressOf(v) };
 }
 
 export function getProject(db: Db, id: number): Project | undefined {
@@ -41,7 +61,15 @@ export function requireProject(db: Db, id: number): Project {
   return p;
 }
 
-export type ProjectInput = { name: string } & Partial<Record<ProjectField, string>> & { status?: ProjectStatus };
+export type ProjectInput = { name: string } & Partial<Record<ProjectField, string>> & { status?: ProjectStatus; kind?: string };
+
+function cleanKind(kind: string | undefined): string {
+  const k = (kind ?? '').trim();
+  if (!k) return '';
+  const r = toRole(k);
+  if (!r || r === 'etc') throw new UserError(`작업 분야가 올바르지 않아요: ${k}`);
+  return r;
+}
 
 function cleanName(name: string): string {
   const n = name.replace(/\s+/g, ' ').trim();
@@ -61,10 +89,11 @@ export function createProject(db: Db, input: ProjectInput): Project {
   const status = input.status && isProjectStatus(input.status) ? input.status : 'active';
   const vals = PROJECT_FIELDS.map((f) => (input[f] ?? '').trim());
   const r = db.run(
-    `INSERT INTO projects (name, status, ${PROJECT_FIELDS.join(', ')}, created_at, updated_at)
-     VALUES (?, ?, ${PROJECT_FIELDS.map(() => '?').join(', ')}, ?, ?)`,
+    `INSERT INTO projects (name, status, kind, ${PROJECT_FIELDS.join(', ')}, created_at, updated_at)
+     VALUES (?, ?, ?, ${PROJECT_FIELDS.map(() => '?').join(', ')}, ?, ?)`,
     name,
     status,
+    cleanKind(input.kind),
     ...vals,
     now,
     now,
@@ -72,7 +101,7 @@ export function createProject(db: Db, input: ProjectInput): Project {
   return requireProject(db, r.lastInsertRowid);
 }
 
-export type ProjectChanges = Partial<Record<ProjectField, string>> & { name?: string; status?: ProjectStatus };
+export type ProjectChanges = Partial<Record<ProjectField, string>> & { name?: string; status?: ProjectStatus; kind?: string };
 
 export function updateProject(db: Db, id: number, changes: ProjectChanges): Project {
   const p = requireProject(db, id);
@@ -89,6 +118,10 @@ export function updateProject(db: Db, id: number, changes: ProjectChanges): Proj
     if (!isProjectStatus(changes.status)) throw new UserError('프로젝트 상태가 올바르지 않아요');
     sets.push('status = ?');
     vals.push(changes.status);
+  }
+  if (changes.kind !== undefined) {
+    sets.push('kind = ?');
+    vals.push(cleanKind(changes.kind));
   }
   for (const f of PROJECT_FIELDS) {
     const v = changes[f];

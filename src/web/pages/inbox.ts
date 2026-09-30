@@ -1,4 +1,5 @@
 import type { AppCtx } from '../../app-context.ts';
+import { VIA_LABEL, listActivity, undoActivity } from '../../domain/activity.ts';
 import {
   approveProposal,
   describeProposal,
@@ -62,10 +63,13 @@ export function inboxPage(app: AppCtx) {
   return (ctx: Ctx): void => {
     const pending = listProposals(app.db, 'pending');
     const resolved = listProposals(app.db, 'resolved', 20);
-    const groups = new Map<string, ProposalView[]>();
+    const activity = listActivity(app.db, { limit: 40 });
+    const groups = new Map<string, { projectId: number | null; items: ProposalView[] }>();
     for (const p of pending) {
       const key = p.kind === 'project' ? '새 프로젝트' : p.project_name ?? '프로젝트 없음';
-      groups.set(key, [...(groups.get(key) ?? []), p]);
+      const g = groups.get(key) ?? { projectId: p.kind === 'project' ? null : p.project_id, items: [] };
+      g.items.push(p);
+      groups.set(key, g);
     }
     const body = html`
       <div class="page-head">
@@ -75,17 +79,38 @@ export function inboxPage(app: AppCtx) {
               ${csrfInput(ctx)}<button class="btn">모두 승인</button></form>`
           : ''}
       </div>
-      <p class="hint">AI가 올린 결정·할 일·프로젝트 변경이에요. 승인해야 Hub에 반영돼요. 자동 승인 규칙은 <a href="/settings#auto">설정</a>에서 바꿀 수 있어요.</p>
+      <p class="hint">AI가 올린 결정·할 일·프로젝트 변경이에요. 승인해야 Hub에 반영돼요. AI에게 직접 시킨 변경과 자동 승인은 아래 <a href="#activity">변경 기록</a>에서 되돌릴 수 있어요.</p>
       ${pending.length
         ? [...groups.entries()].map(
-            ([name, items]) => html`<section class="inbox-group">
-              <h3>${name} <span class="count">${items.length}</span></h3>
-              <ul class="proposals">${items.map((p) => proposalCard(app, ctx, p))}</ul>
+            ([name, g]) => html`<section class="inbox-group">
+              <h3>${name} <span class="count">${g.items.length}</span>
+                ${g.items.length > 1 && g.projectId !== null
+                  ? html`<form method="post" action="/inbox/approve-all" class="inline">${csrfInput(ctx)}<input type="hidden" name="project" value="${g.projectId}"><button class="btn btn-ghost btn-small">이 프로젝트 모두 승인</button></form>`
+                  : ''}
+              </h3>
+              <ul class="proposals">${g.items.map((p) => proposalCard(app, ctx, p))}</ul>
             </section>`,
           )
         : html`<p class="empty">승인을 기다리는 제안이 없어요.</p>`}
+
+      <section class="card" id="activity">
+        <h3>변경 기록 <span class="muted small">AI가 만든 변경 · 최근 40건</span></h3>
+        ${activity.length
+          ? html`<ul class="plain activity">${activity.map(
+              (a) => html`<li class="${a.undone_at ? 'undone' : ''}">
+                <span class="chip">${VIA_LABEL[a.via]}</span>
+                <span>${a.summary}</span>
+                <span class="muted small">${a.source} · ${formatAgo(a.at)}</span>
+                ${a.undone_at
+                  ? html`<span class="muted small">되돌림</span>`
+                  : html`<form method="post" action="/activity/${a.id}/undo" class="inline" data-confirm="이 변경을 되돌릴까요?">${csrfInput(ctx)}<button class="btn btn-ghost btn-small">되돌리기</button></form>`}
+              </li>`,
+            )}</ul>`
+          : html`<p class="muted small">아직 기록이 없어요.</p>`}
+      </section>
+
       ${resolved.length
-        ? html`<details class="card history"><summary>최근 처리 ${resolved.length}</summary>
+        ? html`<details class="card history"><summary>최근 처리한 제안 ${resolved.length}</summary>
             <ul class="plain">${resolved.map((p) => {
               const d = describeProposal(app.db, p);
               return html`<li class="small"><span class="chip ${p.status}">${p.status === 'approved' ? '승인' : '거절'}</span>
@@ -107,7 +132,7 @@ export function inboxActions(app: AppCtx) {
             if (form.has(k)) overrides[k] = field(form, k);
           }
         }
-        approveProposal(app.db, idParam(ctx), overrides);
+        approveProposal(app.db, idParam(ctx), { overrides, via: 'approved' });
         flash(ctx, '승인해서 반영했어요');
       }),
     reject: (ctx: Ctx) =>
@@ -116,18 +141,25 @@ export function inboxActions(app: AppCtx) {
         flash(ctx, '거절했어요');
       }),
     approveAll: (ctx: Ctx) =>
-      formAction(ctx, '/inbox', () => {
+      formAction(ctx, '/inbox', (form) => {
+        const project = field(form, 'project');
         let ok = 0;
         const errors: string[] = [];
         for (const p of listProposals(app.db, 'pending')) {
+          if (project && String(p.project_id) !== project) continue;
           try {
-            approveProposal(app.db, p.id);
+            approveProposal(app.db, p.id, { via: 'approved' });
             ok++;
           } catch (err) {
             errors.push(`#${p.id} ${err instanceof Error ? err.message : String(err)}`);
           }
         }
         flash(ctx, errors.length ? `${ok}건 승인, ${errors.length}건 실패: ${errors.join(' / ')}` : `${ok}건 모두 승인했어요`, errors.length ? 'error' : 'ok');
+      }),
+    undo: (ctx: Ctx) =>
+      formAction(ctx, '/inbox#activity', () => {
+        flash(ctx, undoActivity(app.db, idParam(ctx)));
+        return '/inbox#activity';
       }),
   };
 }
