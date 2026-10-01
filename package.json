@@ -1,8 +1,8 @@
 {
   "name": "hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "개인용 작업 허브: 프로젝트·결정·할 일을 한곳에 모으고, 여러 AI가 MCP로 같은 맥락을 공유",
+  "description": "개인용 작업 허브: 프로젝트·할 일·결정·레퍼런스를 한곳에 모으고, 여러 AI가 MCP로 같은 맥락을 공유",
   "type": "module",
   "engines": {
     "node": ">=22.18"

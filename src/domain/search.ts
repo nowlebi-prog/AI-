@@ -4,6 +4,7 @@ import { projectBrief, clip } from './brief.ts';
 import { getDecision, getLog } from './decisions.ts';
 import { getImport } from './imports.ts';
 import { getProject } from './projects.ts';
+import { getReference } from './references.ts';
 import { getTask } from './tasks.ts';
 import { PRIORITY_LABEL, ROLE_LABEL, TASK_STATUS_LABEL, UserError } from './types.ts';
 
@@ -93,6 +94,20 @@ export function search(db: Db, query: string, baseUrl: string, limit = 20): Sear
     });
   }
 
+  const rf = whereAll(['r.title', 'r.url', 'r.description', 'r.note', 'r.tags', 'r.category'], terms);
+  for (const r of db.all<{ id: number; title: string; url: string; site: string; category: string; description: string; note: string; created_at: string }>(
+    `SELECT r.id, r.title, r.url, r.site, r.category, r.description, r.note, r.created_at FROM refs r WHERE ${rf.sql} ORDER BY r.created_at DESC LIMIT 20`,
+    ...rf.params,
+  )) {
+    hits.push({
+      id: `ref:${r.id}`,
+      title: `[R${r.id}] 레퍼런스(${r.category}): ${clip(r.title || r.site, 60)}`,
+      url: r.url,
+      text: clip([r.note, r.description].filter(Boolean).join(' — ') || r.url, 200),
+      created_at: r.created_at,
+    });
+  }
+
   const im = whereAll(['title', 'content'], terms);
   for (const r of db.all<{ id: number; title: string; content: string; created_at: string }>(
     `SELECT id, title, content, created_at FROM imports WHERE ${im.sql} ORDER BY created_at DESC LIMIT 5`,
@@ -113,15 +128,18 @@ export interface FetchedDoc {
   metadata: Record<string, string | number | null>;
 }
 
-const SHORT: Record<string, string> = { p: 'project', d: 'decision', t: 'task', l: 'log', i: 'import' };
+const SHORT: Record<string, string> = { p: 'project', d: 'decision', t: 'task', l: 'log', i: 'import', r: 'ref' };
 
 export function parseDocId(id: string): { type: string; num: number } {
   const s = id.trim();
-  const long = /^(project|decision|task|log|import)[:#\s-]?(\d+)$/i.exec(s);
-  if (long) return { type: (long[1] ?? '').toLowerCase(), num: Number(long[2]) };
-  const short = /^([pdtli])(\d+)$/i.exec(s);
+  const long = /^(project|decision|task|log|import|ref|reference)[:#\s-]?(\d+)$/i.exec(s);
+  if (long) {
+    const t = (long[1] ?? '').toLowerCase();
+    return { type: t === 'reference' ? 'ref' : t, num: Number(long[2]) };
+  }
+  const short = /^([pdtlir])(\d+)$/i.exec(s);
   if (short) return { type: SHORT[(short[1] ?? '').toLowerCase()] ?? '', num: Number(short[2]) };
-  throw new UserError(`문서 ID 형식을 모르겠어요: '${id}'. 예: project:1, decision:12, task:5, log:7, import:2 (또는 P1, D12, T5)`);
+  throw new UserError(`문서 ID 형식을 모르겠어요: '${id}'. 예: project:1, decision:12, task:5, log:7, ref:3, import:2 (또는 P1, D12, T5, R3)`);
 }
 
 export function fetchDoc(db: Db, id: string, ctx: { baseUrl: string; today: string; tz: string }): FetchedDoc {
@@ -185,6 +203,26 @@ export function fetchDoc(db: Db, id: string, ctx: { baseUrl: string; today: stri
         text: `${l.summary}\n\n(${formatDate(dateOf(l.created_at, ctx.tz))} · ${l.source})`,
         url: l.project_id ? `${ctx.baseUrl}/projects/${l.project_id}#log-${l.id}` : `${ctx.baseUrl}/`,
         metadata: { type: 'log', project_id: l.project_id, created_at: l.created_at },
+      };
+    }
+    case 'ref': {
+      const r = getReference(db, num);
+      if (!r) break;
+      const lines = [
+        `레퍼런스: ${r.title || r.site}`,
+        `링크: ${r.url}`,
+        `카테고리: ${r.category}${r.tags ? ` · 태그: ${r.tags.split(' ').map((t) => `#${t}`).join(' ')}` : ''}`,
+        r.project_name ? `프로젝트: P${r.project_id} ${r.project_name}` : '',
+        r.description ? `설명: ${r.description}` : '',
+        r.note ? `메모: ${r.note}` : '',
+        `저장: ${formatDate(dateOf(r.created_at, ctx.tz))} · ${r.source}`,
+      ].filter(Boolean);
+      return {
+        id: `ref:${r.id}`,
+        title: `[R${r.id}] ${r.title || r.site}`,
+        text: lines.join('\n'),
+        url: r.url,
+        metadata: { type: 'ref', category: r.category, project_id: r.project_id, created_at: r.created_at },
       };
     }
     case 'import': {

@@ -210,7 +210,7 @@ export function authorizeGet(app: AppCtx) {
       <h1>Hub 연결 요청</h1>
       <p><strong>${client.client_name}</strong>이(가) Hub에 연결하려고 해요.</p>
       <p class="small muted">허용하면 ${hostOf(redirectUri)}(으)로 돌아가요.</p>
-      <form method="post" action="/oauth/authorize" class="stack">
+      <form method="post" action="/oauth/authorize" class="stack" data-no-ajax>
         ${csrfInput(ctx)}
         ${hidden.map((k) => html`<input type="hidden" name="${k}" value="${ctx.url.searchParams.get(k) ?? ''}">`)}
         <label>이 연결의 이름 (출처로 표시돼요)<input type="text" name="label" value="${client.label ?? client.client_name}" maxlength="60"></label>

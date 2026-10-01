@@ -1,4 +1,5 @@
 import { addDays, isValidDate, makeDate, weekday } from '../lib/time.ts';
+import { findRepeat, nextOccurrence } from './repeat.ts';
 import { toRole, type Priority, type Role } from './types.ts';
 
 const KO_DAYS: Record<string, number> = { 월: 0, 화: 1, 수: 2, 목: 3, 금: 4, 토: 5, 일: 6 };
@@ -123,6 +124,7 @@ export function parseDateExpr(input: string, today: string): string | null {
 const ROLE_KEYWORDS: Array<[Role, RegExp]> = [
   ['ops', /견적|계산서|세금|미팅|정산|계약|입금|청구|회신|일정\s*조율/i],
   ['marketing', /마케팅|광고|콘텐츠|컨텐츠|인스타|블로그|캠페인|카피|뉴스레터|유튜브|릴스|홍보|\bsns\b|\bseo\b/i],
+  ['docs', /\bppt\b|피피티|슬라이드|발표\s*자료|장표|제안서|보고서|키노트|keynote|\bdeck\b|문서\s*작성/i],
   ['design', /디자인|시안|로고|배너|썸네일|피그마|목업|\bfigma\b|\bui\b|\bux\b/i],
   ['dev', /개발|버그|배포|코드|서버|퍼블리싱|프론트|백엔드|리팩터|\bapi\b|\bdb\b|\bgithub\b/i],
   ['plan', /기획|요구사항|스펙|와이어프레임|플로우|정책|시나리오|\bprd\b|\bia\b/i],
@@ -139,6 +141,8 @@ export interface QuickAddResult {
   role: Role;
   priority: Priority;
   due_date: string | null;
+  /** 반복 규칙 (없으면 '') */
+  repeat: string;
 }
 
 function normalizeName(s: string): string {
@@ -205,6 +209,14 @@ export function parseQuickAdd(
     text = text.replace(urgent[0], ' ');
   }
 
+  // 반복 ('매주 월요일'의 '월요일'을 날짜로 읽기 전에 먼저 뺀다)
+  let repeat = '';
+  const rm = findRepeat(text, today);
+  if (rm) {
+    repeat = rm.rule;
+    text = `${text.slice(0, rm.index)} ${text.slice(rm.index + rm.length)}`;
+  }
+
   // 마감
   let due: string | null = null;
   const dm = findDate(text, today);
@@ -212,6 +224,7 @@ export function parseQuickAdd(
     due = dm.date;
     text = `${text.slice(0, dm.index)} ${text.slice(dm.index + dm.length)}`;
   }
+  if (repeat && !due) due = nextOccurrence(repeat, today, true);
 
   const title = tidy(text) || input.trim();
   return {
@@ -220,5 +233,6 @@ export function parseQuickAdd(
     role: role ?? inferRole(title),
     priority,
     due_date: due,
+    repeat,
   };
 }

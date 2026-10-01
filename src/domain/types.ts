@@ -1,12 +1,13 @@
 export class UserError extends Error {}
 
-export const ROLES = ['dev', 'plan', 'design', 'marketing', 'ops', 'etc'] as const;
+export const ROLES = ['dev', 'plan', 'design', 'marketing', 'docs', 'ops', 'etc'] as const;
 export type Role = (typeof ROLES)[number];
 export const ROLE_LABEL: Record<Role, string> = {
   dev: '개발',
   plan: '기획',
   design: '디자인',
   marketing: '마케팅',
+  docs: '문서·PPT',
   ops: '운영',
   etc: '기타',
 };
@@ -47,6 +48,8 @@ export interface Project {
   id: number;
   name: string;
   status: ProjectStatus;
+  /** 주 작업 분야 (Role 값, 없으면 '') */
+  kind: string;
   summary: string;
   goal: string;
   audience: string;
@@ -74,6 +77,12 @@ export interface Task {
   created_at: string;
   updated_at: string;
   done_at: string | null;
+  /** 비어 있지 않으면 '대기 중' (무엇을 기다리는지) */
+  waiting: string;
+  /** 반복 규칙 (repeat.ts) */
+  repeat: string;
+  /** 반복 할 일을 완료해서 만들어진 다음 할 일 */
+  next_task_id: number | null;
 }
 
 export interface TaskWithProject extends Task {
@@ -141,6 +150,7 @@ const ROLE_ALIASES: Record<string, Role> = {
   plan: 'plan', planning: 'plan', 기획: 'plan',
   design: 'design', 디자인: 'design',
   marketing: 'marketing', 마케팅: 'marketing',
+  docs: 'docs', doc: 'docs', ppt: 'docs', 피피티: 'docs', 문서: 'docs', '문서·ppt': 'docs', 문서ppt: 'docs', 발표: 'docs', 슬라이드: 'docs', 자료: 'docs',
   ops: 'ops', operation: 'ops', operations: 'ops', admin: 'ops', 운영: 'ops',
   etc: 'etc', other: 'etc', 기타: 'etc',
 };

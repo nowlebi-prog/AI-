@@ -57,6 +57,17 @@ export function listDecisions(
   );
 }
 
+export function updateDecision(db: Db, id: number, changes: { content?: string; reason?: string }): Decision {
+  const d = getDecision(db, id);
+  if (!d) throw new UserError(`결정 D${id}를 찾을 수 없어요`);
+  const content = changes.content !== undefined ? changes.content.trim() : d.content;
+  if (!content) throw new UserError('결정 내용을 입력해 주세요');
+  if (content.length > 2000) throw new UserError('결정 내용은 2000자 이내로 해 주세요');
+  const reason = changes.reason !== undefined ? changes.reason.trim() : d.reason;
+  db.run('UPDATE decisions SET content = ?, reason = ? WHERE id = ?', content, reason, id);
+  return getDecision(db, id) as Decision;
+}
+
 export function deleteDecision(db: Db, id: number): void {
   db.run('DELETE FROM decisions WHERE id = ?', id);
 }

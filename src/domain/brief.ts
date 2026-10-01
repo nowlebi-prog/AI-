@@ -4,11 +4,14 @@ import { listDecisions, listLogs } from './decisions.ts';
 import { getProfile } from './profile.ts';
 import { listProjects, requireProject } from './projects.ts';
 import { pendingCount } from './proposals.ts';
+import { listReferences } from './references.ts';
+import { describeRepeat } from './repeat.ts';
 import { listTasks, recentDone, todayBoard } from './tasks.ts';
 import {
   PRIORITY_LABEL,
   PROJECT_STATUS_LABEL,
   ROLE_LABEL,
+  toRole,
   type Decision,
   type Project,
   type SessionLog,
@@ -47,6 +50,8 @@ export function taskLine(t: TaskWithProject, today: string, withProject = false)
   const bits = [`[T${t.id}] ${t.title}`, ROLE_LABEL[t.role]];
   if (t.priority !== 2) bits.push(`우선순위 ${PRIORITY_LABEL[t.priority]}`);
   if (t.due_date) bits.push(`마감 ${formatDue(t.due_date, today)}${t.due_date < today && t.status !== 'done' ? '(지남)' : ''}`);
+  if (t.repeat) bits.push(`반복 ${describeRepeat(t.repeat)}`);
+  if (t.waiting) bits.push(`대기: ${t.waiting}`);
   if (t.status === 'doing') bits.push('진행 중');
   if (withProject && t.project_name) bits.push(`P${t.project_id} ${t.project_name}`);
   return `- ${bits.join(' · ')}`;
@@ -90,7 +95,7 @@ function rules(o: BriefOptions, projectName?: string): string[] {
       `프로젝트: ${projectName ?? '(프로젝트 이름)'}`,
       '요약: 이번 대화 요약 2~3문장',
       '결정: 결정 내용 | 이유: 이유 | 대체: D번호',
-      '할 일: 할 일 내용 | 역할(개발/기획/디자인/마케팅/운영) | 마감 YYYY-MM-DD',
+      '할 일: 할 일 내용 | 역할(개발/기획/디자인/마케팅/문서·PPT/운영) | 마감 YYYY-MM-DD',
       '완료: T번호, T번호',
       '위치: 어디까지 했는지 한 줄',
       '[/Hub 메모]',
@@ -103,7 +108,7 @@ function rules(o: BriefOptions, projectName?: string): string[] {
     '- 중요한 결정 → propose_decision (이전 결정을 바꾸면 supersedes에 D번호)',
     '- 새 할 일 → propose_task / 기존 할 일 완료·변경 → propose_task에 task_id',
     '- 대화를 마칠 때 → log_session (요약과 마지막 위치)',
-    '- 제안은 사용자가 Hub 인박스에서 승인해야 반영돼요.',
+    '- 제안은 사용자가 Hub 인박스에서 승인해야 반영돼요. 단, 사용자가 "추가해 줘/완료 처리해 줘"처럼 직접 시킨 변경은 direct=true로 보내면 바로 반영돼요.',
   ];
 }
 
@@ -113,7 +118,10 @@ function cardLines(p: Project, o: BriefOptions): string[] {
     if (v.trim()) out.push(`- ${label}: ${v.trim()}`);
   };
   add('한 줄 소개', p.summary);
-  out.push(`- 상태: ${PROJECT_STATUS_LABEL[p.status]}${p.stage ? ` · 현재 단계: ${p.stage}` : ''}`);
+  const kind = toRole(p.kind);
+  out.push(
+    `- 상태: ${PROJECT_STATUS_LABEL[p.status]}${kind && kind !== 'etc' ? ` · 분야: ${ROLE_LABEL[kind]}` : ''}${p.stage ? ` · 현재 단계: ${p.stage}` : ''}`,
+  );
   if (o.size !== 'S') {
     add('목표', p.goal);
     add('타깃', p.audience);
@@ -185,6 +193,13 @@ export function projectBrief(db: Db, projectId: number, o: BriefOptions): string
   const logs = listLogs(db, { projectId: p.id, limit: lim.logs });
   if (logs.length) {
     lines.push('## 최근 세션', ...logs.map((l) => logLine(l, o.tz, lim.logChars)), '');
+  }
+
+  if (o.size === 'L') {
+    const refs = listReferences(db, { projectId: p.id, limit: 15 });
+    if (refs.length) {
+      lines.push('## 레퍼런스', ...refs.map((r) => `- [R${r.id}] ${r.title || r.site} (${r.category}) ${r.url}${r.note ? ` — ${clip(r.note, 80)}` : ''}`), '');
+    }
   }
 
   lines.push(...rules(o, p.name));
